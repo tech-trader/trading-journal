@@ -1,26 +1,35 @@
-import React from 'react';
-import logo from './logo.svg';
-import './App.css';
+import React, { useEffect, useState } from 'react';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import axios from 'axios';
+import Dashboard from './pages/Dashboard';
 
 function App() {
-  return (
-    <div className="App">
-      <header className="App-header">
-        <img src={logo} className="App-logo" alt="logo" />
-        <p>
-          Edit <code>src/App.js</code> and save to reload.
-        </p>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React
-        </a>
-      </header>
-    </div>
-  );
+    const [dashboardData, setDashboardData] = useState(null);
+
+    useEffect(() => {
+      const backendURL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5001';
+  
+      console.log('Fetching data from:', `${backendURL}/api/dashboard`);
+  
+      axios.get(`${backendURL}/api/dashboard`)
+          .then((response) => {
+              console.log('Dashboard data fetched:', response.data);
+              setDashboardData(response.data);
+          })
+          .catch((error) => {
+              console.error('Error fetching dashboard data:', error);
+          });
+  }, []);
+  
+  
+
+    return (
+        <Router>
+            <Routes>
+                <Route path="/" element={<Dashboard data={dashboardData} />} />
+            </Routes>
+        </Router>
+    );
 }
 
 export default App;

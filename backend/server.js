@@ -1,17 +1,25 @@
+require('dotenv').config(); // Import dotenv at the top
+
 const express = require('express');
 const cors = require ('cors');
+const dashboardRoutes = require('./routes/dashboard');
 
 const app = express();
-const PORT = 5000;
+
+// Use environment variables
+const PORT = process.env.PORT || 5001;
 
 //Middleware
 app.use(cors());
 app.use(express.json());
 
-//Routes
-app.get('/', (req,res) => {
-    res.send('Backend is running!');
+// Root route
+app.get('/', (req, res) => {
+    res.send('Welcome to the Trading Journal Backend!');
 });
+
+//Routes
+app.use('/api/dashboard', dashboardRoutes)
 
 //Start Server
 app.listen(PORT, () => {
