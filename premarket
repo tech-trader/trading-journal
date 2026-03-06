@@ -1,0 +1,998 @@
+import { useState, useEffect } from "react";
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+const mono = "'IBM Plex Mono', monospace";
+const SESSIONS = {
+  ASIAN:  { label:"ASIAN",  hours:"18:00–01:00 ET", color:"#4FC3F7", dim:"#081820" },
+  LONDON: { label:"LONDON", hours:"02:00–08:30 ET", color:"#81C784", dim:"#081508" },
+  RTH:    { label:"RTH",    hours:"09:30–16:00 ET", color:"#FFB74D", dim:"#1a1000" },
+};
+const BC = { BULLISH:"#66BB6A", BEARISH:"#EF5350", NEUTRAL:"#78909C", WAIT:"#FFA726" };
+
+// ── Base styles ───────────────────────────────────────────────────────────────
+const card = { background:"#0D1117", border:"1px solid #1E2A32", borderRadius:6, overflow:"hidden", marginBottom:16 };
+const cardHead = () => ({ padding:"9px 16px", borderBottom:"1px solid #1E2A32", background:"#0A0F14", display:"flex", alignItems:"center", justifyContent:"space-between" });
+const lbl = (color="#37474F") => ({ fontFamily:mono, fontSize:9, color, letterSpacing:3, textTransform:"uppercase" });
+const iBase = { width:"100%", background:"#07090C", border:"1px solid #1a2530", color:"#CFD8DC", fontFamily:mono, fontSize:12, padding:"6px 10px", outline:"none", borderRadius:4, boxSizing:"border-box" };
+const selBase = { ...iBase, cursor:"pointer" };
+const taBase = { ...iBase, resize:"vertical", minHeight:72 };
+
+// ── Price relationship calculator ─────────────────────────────────────────────
+// Takes a price and named levels, returns human-readable context strings
+function calcRelationships(price, levels) {
+  if (!price || isNaN(parseFloat(price))) return null;
+  const p = parseFloat(price);
+  const n = (k) => levels[k] ? parseFloat(levels[k]) : null;
+  const fmt = (v) => v !== null ? v.toFixed(2) : "?";
+  const diff = (v) => v !== null ? `${p > v ? "+" : ""}${(p - v).toFixed(2)}` : null;
+  const rel = (v, label) => {
+    if (v === null) return null;
+    const d = p - v;
+    const abs = Math.abs(d);
+    if (abs <= 0.5) return `AT ${label} (±0.5)`;
+    return `${d > 0 ? "ABOVE" : "BELOW"} ${label} by ${abs.toFixed(2)}pts`;
+  };
+
+  const results = [];
+
+  // Value Area
+  const vah = n("vah"), poc = n("poc"), val = n("val");
+  if (vah !== null && val !== null) {
+    if (p > vah)       results.push({ key:"vs_VA",   text:`ABOVE VAH (${fmt(vah)}) — outside value, bullish`, color:"#66BB6A" });
+    else if (p < val)  results.push({ key:"vs_VA",   text:`BELOW VAL (${fmt(val)}) — outside value, bearish`, color:"#EF5350" });
+    else               results.push({ key:"vs_VA",   text:`INSIDE VALUE AREA — balanced, rotation expected`, color:"#FFA726" });
+  }
+  if (poc !== null) results.push({ key:"vs_POC", text:rel(poc, `POC ${fmt(poc)}`) + (poc ? ` | ${diff(poc)}pts` : ""), color:"#FFA726" });
+
+  // Prior day
+  const pdh = n("pdh"), pdc = n("pdc"), pdl = n("pdl");
+  if (pdc !== null) results.push({ key:"vs_PDC", text:rel(pdc, `PDC ${fmt(pdc)}`) + ` | ${diff(pdc)}pts`, color:"#78909C" });
+  if (pdh !== null) results.push({ key:"vs_PDH", text:rel(pdh, `PDH ${fmt(pdh)}`) + ` | ${diff(pdh)}pts`, color:"#4FC3F7" });
+  if (pdl !== null) results.push({ key:"vs_PDL", text:rel(pdl, `PDL ${fmt(pdl)}`) + ` | ${diff(pdl)}pts`, color:"#FF7043" });
+
+  // Globex
+  const gH = n("globexH"), gL = n("globexL"), gMid = n("overnightMid");
+  if (gH !== null && gL !== null) {
+    const gmid = gMid !== null ? gMid : (gH + gL) / 2;
+    results.push({ key:"vs_Globex", text:`Globex range ${fmt(gL)}–${fmt(gH)} | ${p > gmid ? "UPPER half" : "LOWER half"} of range | inventory: ${p > gmid ? "net long" : "net short"}`, color:"#CE93D8" });
+  }
+
+  // Asian
+  const aH = n("asianH"), aL = n("asianL");
+  if (aH !== null && aL !== null) {
+    if (p > aH)      results.push({ key:"vs_Asian", text:`ABOVE Asian High (${fmt(aH)}) by ${(p-aH).toFixed(2)}pts — breakout`, color:"#4FC3F7" });
+    else if (p < aL) results.push({ key:"vs_Asian", text:`BELOW Asian Low (${fmt(aL)}) by ${(aL-p).toFixed(2)}pts — breakdown`, color:"#0288D1" });
+    else             results.push({ key:"vs_Asian", text:`INSIDE Asian range ${fmt(aL)}–${fmt(aH)} | ${p > (aH+aL)/2 ? "upper" : "lower"} half`, color:"#4FC3F7" });
+  }
+
+  // London
+  const lH = n("londonH"), lL = n("londonL");
+  if (lH !== null && lL !== null) {
+    if (p > lH)      results.push({ key:"vs_London", text:`ABOVE London High (${fmt(lH)}) by ${(p-lH).toFixed(2)}pts`, color:"#81C784" });
+    else if (p < lL) results.push({ key:"vs_London", text:`BELOW London Low (${fmt(lL)}) by ${(lL-p).toFixed(2)}pts`, color:"#388E3C" });
+    else             results.push({ key:"vs_London", text:`INSIDE London range ${fmt(lL)}–${fmt(lH)}`, color:"#81C784" });
+  }
+
+  // VWAPs
+  const vwapKeys = [
+    { k:"sessionVwap", label:"Session VWAP" },
+    { k:"pdVwapClose", label:"PD VWAP@Close" },
+    { k:"weeklyVwap",  label:"Weekly VWAP" },
+    { k:"monthlyVwap", label:"Monthly VWAP" },
+    { k:"anchored1",   label:"Anchored VWAP 1" },
+    { k:"anchored2",   label:"Anchored VWAP 2" },
+  ];
+  const vwapResults = vwapKeys
+    .map(({ k, label }) => { const v = levels[k] ? parseFloat(levels[k]) : null; return v ? `${p > v ? "↑" : "↓"} ${p > v ? "above" : "below"} ${label}(${fmt(v)}) by ${Math.abs(p-v).toFixed(2)}` : null; })
+    .filter(Boolean);
+  if (vwapResults.length > 0) {
+    const allAbove = vwapResults.every(r => r.startsWith("↑"));
+    const allBelow = vwapResults.every(r => r.startsWith("↓"));
+    results.push({ key:"vs_VWAPs", text:`VWAP stack: ${allAbove ? "BULLISH — price above all VWAPs" : allBelow ? "BEARISH — price below all VWAPs" : "MIXED — price between VWAPs"} | ${vwapResults.join(", ")}`, color:"#FFA726" });
+  }
+
+  // GEX flip
+  const gfx = n("gexFlip");
+  if (gfx !== null) results.push({ key:"vs_GEXFlip", text:`${p > gfx ? "ABOVE" : "BELOW"} GEX Flip (${fmt(gfx)}) by ${Math.abs(p-gfx).toFixed(2)}pts — ${p > gfx ? "long gamma / pinning regime" : "short gamma / vol amplification regime"}`, color:"#CE93D8" });
+
+  // Call/Put walls
+  const cw = n("callWall"), pw = n("putWall");
+  if (cw !== null) results.push({ key:"vs_CallWall", text:`${Math.abs(p-cw).toFixed(2)}pts ${p < cw ? "below" : "above"} Call Wall (${fmt(cw)}) — ${p < cw ? "resistance above" : "above call wall, next resistance higher"}`, color:"#66BB6A" });
+  if (pw !== null) results.push({ key:"vs_PutWall",  text:`${Math.abs(p-pw).toFixed(2)}pts ${p > pw ? "above" : "below"} Put Wall (${fmt(pw)}) — ${p > pw ? "support below" : "below put wall, next support lower"}`, color:"#EF5350" });
+
+  return results;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function NumInput({ value, onChange, color, placeholder="—", step="0.25" }) {
+  return (
+    <input type="number" step={step} value={value||""} placeholder={placeholder}
+      onChange={e=>onChange(e.target.value)}
+      style={{ ...iBase, color: color||"#CFD8DC", textAlign:"right" }}/>
+  );
+}
+function Sel({ value, onChange, opts }) {
+  return (
+    <select value={value||""} onChange={e=>onChange(e.target.value)} style={selBase}>
+      <option value="">—</option>
+      {opts.map(o=><option key={o} value={o}>{o}</option>)}
+    </select>
+  );
+}
+function Row({ label, children, color }) {
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+      <div style={{ fontFamily:mono, fontSize:10, color: color||"#455A64", width:130, flexShrink:0 }}>{label}</div>
+      <div style={{ flex:1 }}>{children}</div>
+    </div>
+  );
+}
+function Section({ title, color, children, right }) {
+  return (
+    <div style={{ marginBottom:20 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10, paddingBottom:6, borderBottom:"1px solid #111820" }}>
+        <span style={{ ...lbl(color||"#37474F") }}>{title}</span>
+        {right && <span style={{ fontFamily:mono, fontSize:9, color:"#263238" }}>{right}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// ── Clock ─────────────────────────────────────────────────────────────────────
+function Clock() {
+  const [t, setT] = useState(new Date());
+  useEffect(() => { const id = setInterval(()=>setT(new Date()),1000); return ()=>clearInterval(id); }, []);
+  const et = t.toLocaleString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false});
+  const dt = t.toLocaleDateString("en-US",{timeZone:"America/New_York",weekday:"short",month:"short",day:"numeric"});
+  return (
+    <div style={{textAlign:"right"}}>
+      <div style={{fontFamily:mono,fontSize:22,color:"#CFD8DC",letterSpacing:2}}>{et}</div>
+      <div style={{fontFamily:mono,fontSize:9,color:"#37474F",letterSpacing:3,marginTop:2}}>{dt} ET</div>
+    </div>
+  );
+}
+
+// ── Price Snapshot (auto-calculated relationships) ────────────────────────────
+function PriceSnapshot({ price, setPrice, openPrice, setOpenPrice, levels, vwap }) {
+  const combinedLevels = { ...levels, ...vwap };
+  const rels = price ? calcRelationships(price, combinedLevels) : null;
+  const openRels = openPrice ? calcRelationships(openPrice, combinedLevels) : null;
+
+  return (
+    <div style={card}>
+      <div style={cardHead()}>
+        <span style={lbl("#FFFFFF")}>PRICE SNAPSHOT — AUTO CALCULATED</span>
+        <span style={{fontFamily:mono,fontSize:9,color:"#263238"}}>ALL RELATIONSHIPS DERIVED FROM KEY LEVELS + VWAP INPUTS</span>
+      </div>
+      <div style={{padding:"14px 16px"}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
+          <div>
+            <div style={{...lbl("#4FC3F7"),marginBottom:8}}>CURRENT PRICE</div>
+            <NumInput value={price} onChange={setPrice} color="#FFFFFF" placeholder="Enter current price..."/>
+            <div style={{fontFamily:mono,fontSize:9,color:"#263238",marginTop:4}}>↑ Input price above to calculate all relationships</div>
+          </div>
+          <div>
+            <div style={{...lbl("#FFB74D"),marginBottom:8}}>SESSION OPEN PRICE</div>
+            <NumInput value={openPrice} onChange={setOpenPrice} color="#FFB74D" placeholder="Enter session open..."/>
+            <div style={{fontFamily:mono,fontSize:9,color:"#263238",marginTop:4}}>↑ Used for gap analysis and opening context</div>
+          </div>
+        </div>
+
+        {rels && rels.length > 0 && (
+          <div>
+            <div style={{...lbl("#37474F"),marginBottom:10}}>CURRENT PRICE RELATIONSHIPS</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+              {rels.map(r=>(
+                <div key={r.key} style={{padding:"6px 10px",background:"#07090C",border:`1px solid ${r.color}22`,borderRadius:3,borderLeft:`2px solid ${r.color}`}}>
+                  <div style={{fontFamily:mono,fontSize:10,color:r.color,lineHeight:1.5}}>{r.text}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {openRels && openRels.length > 0 && (
+          <div style={{marginTop:14}}>
+            <div style={{...lbl("#37474F"),marginBottom:10}}>SESSION OPEN RELATIONSHIPS</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+              {openRels.map(r=>(
+                <div key={r.key} style={{padding:"6px 10px",background:"#07090C",border:`1px solid ${r.color}11`,borderRadius:3,borderLeft:`2px solid ${r.color}88`}}>
+                  <div style={{fontFamily:mono,fontSize:10,color:r.color+"99",lineHeight:1.5}}>{r.text}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!price && (
+          <div style={{textAlign:"center",padding:"20px 0",fontFamily:mono,fontSize:10,color:"#1E2A32"}}>
+            ENTER PRICES ABOVE TO SEE CALCULATED RELATIONSHIPS
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Key Levels ────────────────────────────────────────────────────────────────
+function KeyLevels({ levels, setLevels }) {
+  const upd = (k,v) => setLevels(p=>({...p,[k]:v}));
+  const groups = [
+    { title:"VALUE AREA (PRIOR DAY)", color:"#FFA726", fields:[
+      {k:"vah",label:"VAH",c:"#66BB6A"},{k:"poc",label:"POC",c:"#FFA726"},{k:"val",label:"VAL",c:"#EF5350"}]},
+    { title:"PRIOR DAY", color:"#4FC3F7", fields:[
+      {k:"pdh",label:"PDH",c:"#4FC3F7"},{k:"pdc",label:"PDC",c:"#78909C"},{k:"pdl",label:"PDL",c:"#FF7043"}]},
+    { title:"OVERNIGHT / ETH", color:"#CE93D8", fields:[
+      {k:"globexH",label:"Globex High",c:"#CE93D8"},{k:"globexL",label:"Globex Low",c:"#BA68C8"},{k:"overnightMid",label:"ON Midpoint",c:"#7E57C2"}]},
+    { title:"SESSION EXTREMES", color:"#81C784", fields:[
+      {k:"asianH",label:"Asian High",c:"#4FC3F7"},{k:"asianL",label:"Asian Low",c:"#0288D1"},
+      {k:"londonH",label:"London High",c:"#81C784"},{k:"londonL",label:"London Low",c:"#388E3C"}]},
+  ];
+  return (
+    <div style={card}>
+      <div style={cardHead()}><span style={lbl("#4FC3F7")}>KEY LEVELS — ES FUTURES</span></div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:0}}>
+        {groups.map((g,gi)=>(
+          <div key={g.title} style={{padding:"14px 16px",borderRight:gi%2===0?"1px solid #1E2A32":"none",borderBottom:gi<2?"1px solid #1E2A32":"none"}}>
+            <div style={{...lbl(g.color),marginBottom:10}}>{g.title}</div>
+            {g.fields.map(f=>(
+              <div key={f.k} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                <div style={{width:3,height:14,background:f.c,borderRadius:2,flexShrink:0}}/>
+                <div style={{fontFamily:mono,fontSize:10,color:"#455A64",width:100,flexShrink:0}}>{f.label}</div>
+                <input type="number" step="0.25" value={levels[f.k]||""} placeholder="—"
+                  onChange={e=>upd(f.k,e.target.value)}
+                  style={{flex:1,background:"transparent",border:"none",borderBottom:"1px solid #1E2A32",
+                    color:f.c,fontFamily:mono,fontSize:13,outline:"none",textAlign:"right",padding:"1px 0"}}/>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── VWAP Panel ────────────────────────────────────────────────────────────────
+function VwapPanel({ data, setData }) {
+  const upd = (k,v) => setData(p=>({...p,[k]:v}));
+  const rows = [
+    {k:"sessionVwap", label:"Session VWAP",    color:"#FFA726", desc:"Current session"},
+    {k:"pdVwapClose", label:"PD VWAP @ Close", color:"#4FC3F7", desc:"Prior day 4pm value"},
+    {k:"weeklyVwap",  label:"Weekly VWAP",     color:"#81C784", desc:"Mon–today anchored"},
+    {k:"monthlyVwap", label:"Monthly VWAP",    color:"#CE93D8", desc:"MTD anchored"},
+    {k:"anchored1",   label:"Anchored VWAP 1", color:"#FF7043", desc:"Custom anchor"},
+    {k:"anchored2",   label:"Anchored VWAP 2", color:"#26C6DA", desc:"Custom anchor"},
+  ];
+  return (
+    <div style={card}>
+      <div style={cardHead()}>
+        <span style={lbl("#FFA726")}>VWAP LEVELS</span>
+        <span style={{fontFamily:mono,fontSize:9,color:"#263238"}}>SESSION · PD CLOSE · WEEKLY · MONTHLY · ANCHORED</span>
+      </div>
+      <div style={{padding:"14px 16px"}}>
+        <div style={{display:"grid",gridTemplateColumns:"140px 100px 1fr",gap:6,marginBottom:8}}>
+          {["VWAP","LEVEL","ANCHOR NOTE / DATE"].map(h=><div key={h} style={lbl()}>{h}</div>)}
+        </div>
+        {rows.map(r=>(
+          <div key={r.k} style={{display:"grid",gridTemplateColumns:"140px 100px 1fr",gap:6,marginBottom:8,alignItems:"center"}}>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <div style={{width:3,height:14,background:r.color,borderRadius:2,flexShrink:0}}/>
+              <div>
+                <div style={{fontFamily:mono,fontSize:10,color:r.color}}>{r.label}</div>
+                <div style={{fontFamily:mono,fontSize:8,color:"#263238"}}>{r.desc}</div>
+              </div>
+            </div>
+            <input type="number" step="0.25" value={data[r.k]||""} placeholder="—"
+              onChange={e=>upd(r.k,e.target.value)}
+              style={{...iBase,color:r.color,textAlign:"right"}}/>
+            <input type="text" value={data[r.k+"_note"]||""} placeholder="e.g. Anchored from Jan 13 low..."
+              onChange={e=>upd(r.k+"_note",e.target.value)}
+              style={{...iBase,color:"#546E7A"}}/>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Volume Profile ────────────────────────────────────────────────────────────
+function VolumeProfilePanel({ data, setData }) {
+  const upd = (k,v) => setData(p=>({...p,[k]:v}));
+  const shapeOpts = ["P-shape (top-heavy / distribution)","b-shape (bottom-heavy / accumulation)","D-shape (balanced)","Double distribution","Thin / elongated (trend day)","Neutral"];
+  const dayTypeOpts = ["Trend Day","Normal Day","Normal Variation","Neutral Day","Double Distribution"];
+  return (
+    <div style={card}>
+      <div style={cardHead()}>
+        <span style={lbl("#CE93D8")}>VOLUME PROFILE</span>
+        <span style={{fontFamily:mono,fontSize:9,color:"#263238"}}>PRIOR WEEK · CURRENT WEEK · PRIOR DAY · NODES</span>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:0}}>
+        {/* Prior Week */}
+        <div style={{padding:"14px 16px",borderRight:"1px solid #1E2A32"}}>
+          <div style={{...lbl("#CE93D8"),marginBottom:10}}>PRIOR WEEK</div>
+          {[{k:"pwPoc",l:"POC",c:"#FFA726"},{k:"pwVah",l:"VAH",c:"#66BB6A"},{k:"pwVal",l:"VAL",c:"#EF5350"},{k:"pwRangeH",l:"Range High",c:"#4FC3F7"},{k:"pwRangeL",l:"Range Low",c:"#FF7043"}].map(f=>(
+            <div key={f.k} style={{display:"flex",alignItems:"center",gap:6,marginBottom:7}}>
+              <div style={{width:3,height:12,background:f.c,borderRadius:2}}/>
+              <div style={{fontFamily:mono,fontSize:10,color:"#455A64",width:80,flexShrink:0}}>{f.l}</div>
+              <input type="number" step="0.25" value={data[f.k]||""} placeholder="—"
+                onChange={e=>upd(f.k,e.target.value)}
+                style={{flex:1,background:"transparent",border:"none",borderBottom:"1px solid #1E2A32",color:f.c,fontFamily:mono,fontSize:12,outline:"none",textAlign:"right",padding:"1px 0"}}/>
+            </div>
+          ))}
+          <div style={{marginTop:10}}>
+            <div style={{...lbl("#263238"),marginBottom:6}}>SHAPE</div>
+            <Sel value={data.pwShape} onChange={v=>upd("pwShape",v)} opts={shapeOpts}/>
+          </div>
+        </div>
+        {/* Current Week */}
+        <div style={{padding:"14px 16px",borderRight:"1px solid #1E2A32"}}>
+          <div style={{...lbl("#81C784"),marginBottom:10}}>CURRENT WEEK (DEVELOPING)</div>
+          {[{k:"cwPoc",l:"POC",c:"#FFA726"},{k:"cwVah",l:"VAH",c:"#66BB6A"},{k:"cwVal",l:"VAL",c:"#EF5350"},{k:"cwRangeH",l:"Range High",c:"#4FC3F7"},{k:"cwRangeL",l:"Range Low",c:"#FF7043"}].map(f=>(
+            <div key={f.k} style={{display:"flex",alignItems:"center",gap:6,marginBottom:7}}>
+              <div style={{width:3,height:12,background:f.c,borderRadius:2}}/>
+              <div style={{fontFamily:mono,fontSize:10,color:"#455A64",width:80,flexShrink:0}}>{f.l}</div>
+              <input type="number" step="0.25" value={data[f.k]||""} placeholder="—"
+                onChange={e=>upd(f.k,e.target.value)}
+                style={{flex:1,background:"transparent",border:"none",borderBottom:"1px solid #1E2A32",color:f.c,fontFamily:mono,fontSize:12,outline:"none",textAlign:"right",padding:"1px 0"}}/>
+            </div>
+          ))}
+          <div style={{marginTop:10}}>
+            <div style={{...lbl("#263238"),marginBottom:6}}>DEVELOPING SHAPE</div>
+            <Sel value={data.cwShape} onChange={v=>upd("cwShape",v)} opts={[...shapeOpts,"Too early to tell"]}/>
+          </div>
+          <div style={{marginTop:8}}>
+            <div style={{...lbl("#263238"),marginBottom:6}}>VALUE MIGRATION</div>
+            <Sel value={data.cwTrend} onChange={v=>upd("cwTrend",v)} opts={["Building higher value (bullish)","Building lower value (bearish)","Balanced / rotational","First day of week"]}/>
+          </div>
+        </div>
+        {/* Prior Day + Nodes */}
+        <div style={{padding:"14px 16px"}}>
+          <div style={{...lbl("#4FC3F7"),marginBottom:10}}>PRIOR DAY PROFILE</div>
+          <div style={{...lbl("#263238"),marginBottom:6}}>SHAPE</div>
+          <Sel value={data.pdShape} onChange={v=>upd("pdShape",v)} opts={shapeOpts}/>
+          <div style={{...lbl("#263238"),marginBottom:6,marginTop:10}}>DAY TYPE</div>
+          <Sel value={data.pdDayType} onChange={v=>upd("pdDayType",v)} opts={dayTypeOpts}/>
+          <div style={{...lbl("#FFA726"),marginBottom:8,marginTop:16}}>HVN / LVN NODES</div>
+          {[{k:"hvn1",l:"HVN 1",c:"#FFA726"},{k:"hvn2",l:"HVN 2",c:"#FB8C00"},{k:"lvn1",l:"LVN 1",c:"#546E7A"},{k:"lvn2",l:"LVN 2",c:"#455A64"}].map(f=>(
+            <div key={f.k} style={{display:"flex",alignItems:"center",gap:6,marginBottom:7}}>
+              <div style={{width:3,height:12,background:f.c,borderRadius:2}}/>
+              <div style={{fontFamily:mono,fontSize:10,color:"#455A64",width:50,flexShrink:0}}>{f.l}</div>
+              <input type="number" step="0.25" value={data[f.k]||""} placeholder="—"
+                onChange={e=>upd(f.k,e.target.value)}
+                style={{flex:1,background:"transparent",border:"none",borderBottom:"1px solid #1E2A32",color:f.c,fontFamily:mono,fontSize:12,outline:"none",textAlign:"right",padding:"1px 0"}}/>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Options / Derivatives ─────────────────────────────────────────────────────
+function OptionsPanel({ data, setData }) {
+  const upd = (k,v) => setData(p=>({...p,[k]:v}));
+  return (
+    <div style={card}>
+      <div style={cardHead()}>
+        <span style={lbl("#CE93D8")}>OPTIONS / DERIVATIVES</span>
+        <span style={{fontFamily:mono,fontSize:9,color:"#263238"}}>GEX · VIX · VVIX · FLOW</span>
+      </div>
+      <div style={{padding:"14px 16px",display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:24}}>
+        <div>
+          <Section title="GAMMA EXPOSURE (GEX)" color="#CE93D8">
+            <Row label="GEX Regime"><Sel value={data.gexRegime} onChange={v=>upd("gexRegime",v)} opts={["High Positive >2B (strong pinning)","Positive 0.5–2B (mild pinning)","Neutral","Negative -0.5 to -2B (amplifying)","Deeply Negative <-2B (high vol)"]}/></Row>
+            <Row label="GEX Flip Level"><NumInput value={data.gexFlip} onChange={v=>upd("gexFlip",v)} color="#CE93D8"/></Row>
+            <Row label="Call Wall"><NumInput value={data.callWall} onChange={v=>upd("callWall",v)} color="#66BB6A"/></Row>
+            <Row label="Put Wall"><NumInput value={data.putWall} onChange={v=>upd("putWall",v)} color="#EF5350"/></Row>
+            <Row label="Dealer Positioning"><Sel value={data.dealerPos} onChange={v=>upd("dealerPos",v)} opts={["Long gamma (sell rallies / buy dips)","Short gamma (buy rallies / sell dips)","Neutral"]}/></Row>
+          </Section>
+        </div>
+        <div>
+          <Section title="VOLATILITY SURFACE" color="#78909C">
+            <Row label="VIX"><NumInput value={data.vix} onChange={v=>upd("vix",v)} step="0.01" color="#78909C"/></Row>
+            <Row label="VIX Regime"><Sel value={data.vixRegime} onChange={v=>upd("vixRegime",v)} opts={["<15 (low vol / complacent)","15–20 (normal)","20–25 (elevated)","25–30 (high)","30+ (extreme / fear)"]}/></Row>
+            <Row label="VIX Trend"><Sel value={data.vixTrend} onChange={v=>upd("vixTrend",v)} opts={["Rising sharply","Rising","Flat","Falling","Falling sharply"]}/></Row>
+            <Row label="VVIX"><NumInput value={data.vvix} onChange={v=>upd("vvix",v)} step="0.01" color="#78909C"/></Row>
+            <Row label="IV Rank (0–100)"><NumInput value={data.ivRank} onChange={v=>upd("ivRank",v)} step="1" color="#78909C"/></Row>
+            <Row label="Term Structure"><Sel value={data.termStructure} onChange={v=>upd("termStructure",v)} opts={["Contango (normal / calm)","Flat","Backwardation (stressed / fear)"]}/></Row>
+          </Section>
+        </div>
+        <div>
+          <Section title="FLOW & SENTIMENT" color="#FFA726">
+            <Row label="Put/Call Ratio"><NumInput value={data.putCallRatio} onChange={v=>upd("putCallRatio",v)} step="0.01" color="#FFA726"/></Row>
+            <Row label="P/C Trend"><Sel value={data.pcTrend} onChange={v=>upd("pcTrend",v)} opts={["Rising (more puts = bearish hedge)","Falling (more calls = bullish)","Flat"]}/></Row>
+            <Row label="0DTE Flow"><Sel value={data.zeroDteFlow} onChange={v=>upd("zeroDteFlow",v)} opts={["Call buying dominant","Put buying dominant","Balanced","Aggressive call selling","Aggressive put selling"]}/></Row>
+            <Row label="Dark Pool Bias"><Sel value={data.darkPoolBias} onChange={v=>upd("darkPoolBias",v)} opts={["Accumulating (bullish)","Distributing (bearish)","Neutral","Unknown"]}/></Row>
+            <Row label="Smart Money"><Sel value={data.smartMoney} onChange={v=>upd("smartMoney",v)} opts={["Bullish (large spec long)","Bearish (large spec short)","Neutral","Mixed"]}/></Row>
+          </Section>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Macro / Sentiment ─────────────────────────────────────────────────────────
+function MacroPanel({ data, setData }) {
+  const upd = (k,v) => setData(p=>({...p,[k]:v}));
+  return (
+    <div style={card}>
+      <div style={cardHead()}>
+        <span style={lbl("#81C784")}>MACRO / MARKET SENTIMENT</span>
+        <span style={{fontFamily:mono,fontSize:9,color:"#263238"}}>INDICES · MACRO · SENTIMENT</span>
+      </div>
+      <div style={{padding:"14px 16px",display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:24}}>
+        <div>
+          <Section title="INDEX CORRELATION" color="#4FC3F7">
+            <Row label="ES Pre-mkt %"><NumInput value={data.esChange} onChange={v=>upd("esChange",v)} step="0.01" color="#4FC3F7"/></Row>
+            <Row label="NQ Alignment"><Sel value={data.nqAlign} onChange={v=>upd("nqAlign",v)} opts={["Aligned bullish","Aligned bearish","Diverging (NQ stronger)","Diverging (NQ weaker)","Mixed"]}/></Row>
+            <Row label="YM (Dow)"><Sel value={data.ymAlign} onChange={v=>upd("ymAlign",v)} opts={["Aligned","Diverging stronger","Diverging weaker","Mixed"]}/></Row>
+            <Row label="RTY (Russell)"><Sel value={data.rtyAlign} onChange={v=>upd("rtyAlign",v)} opts={["Risk-on (outperforming)","Risk-off (underperforming)","Aligned","Diverging"]}/></Row>
+          </Section>
+        </div>
+        <div>
+          <Section title="MACRO DRIVERS" color="#FF7043">
+            <Row label="DXY (Dollar)"><Sel value={data.dxy} onChange={v=>upd("dxy",v)} opts={["Rising (bearish equities)","Flat","Falling (bullish equities)","At key level"]}/></Row>
+            <Row label="10Y Yield"><NumInput value={data.tenYield} onChange={v=>upd("tenYield",v)} step="0.001" color="#FF7043"/></Row>
+            <Row label="Yield Trend"><Sel value={data.yieldTrend} onChange={v=>upd("yieldTrend",v)} opts={["Rising sharply (bearish)","Rising","Flat","Falling","Falling sharply (bullish)"]}/></Row>
+            <Row label="Oil (CL)"><Sel value={data.oilTrend} onChange={v=>upd("oilTrend",v)} opts={["Rising","Flat","Falling","Spike"]}/></Row>
+            <Row label="Gold (GC)"><Sel value={data.goldTrend} onChange={v=>upd("goldTrend",v)} opts={["Rising (risk-off)","Flat","Falling (risk-on)"]}/></Row>
+          </Section>
+        </div>
+        <div>
+          <Section title="SENTIMENT & NEWS" color="#FFA726">
+            <Row label="Sector Rotation"><Sel value={data.sectorRotation} onChange={v=>upd("sectorRotation",v)} opts={["Offensive (XLK/XLY leading)","Defensive (XLU/XLV/XLP leading)","Mixed","Neutral"]}/></Row>
+            <Row label="News Risk"><Sel value={data.newsRisk} onChange={v=>upd("newsRisk",v)} opts={["High impact event today","FOMC / Fed speak","CPI/PPI/NFP","Earnings cluster","Medium impact","Low / quiet"]}/></Row>
+            <Row label="Key Event"><Sel value={data.newsEvent} onChange={v=>upd("newsEvent",v)} opts={["FOMC Decision","Fed Chair Speech","CPI","PPI","NFP","ISM","GDP","PCE","Retail Sales","None today"]}/></Row>
+            <Row label="Event Time ET"><Sel value={data.newsTime} onChange={v=>upd("newsTime",v)} opts={["Pre-market (before 9:30)","At open (9:30)","Morning (10:00–12:00)","Afternoon","Post-market","N/A"]}/></Row>
+            <Row label="Fear/Greed"><Sel value={data.fearGreed} onChange={v=>upd("fearGreed",v)} opts={["Extreme Fear (0–25)","Fear (25–45)","Neutral (45–55)","Greed (55–75)","Extreme Greed (75–100)"]}/></Row>
+          </Section>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── News Events ───────────────────────────────────────────────────────────────
+function NewsPanel({ items, setItems }) {
+  const [form, setForm] = useState({time:"",event:"",impact:"HIGH",expected:"",prior:"",notes:""});
+  const upd = (k,v) => setForm(p=>({...p,[k]:v}));
+  const add = () => { if (!form.event) return; setItems(p=>[...p,{...form,id:Date.now()}]); setForm({time:"",event:"",impact:"HIGH",expected:"",prior:"",notes:""}); };
+  const NC = {HIGH:"#EF5350",MED:"#FFA726",LOW:"#78909C"};
+  return (
+    <div style={card}>
+      <div style={cardHead()}><span style={lbl("#EF5350")}>ECONOMIC EVENTS & NEWS</span></div>
+      <div style={{padding:"14px 16px"}}>
+        <div style={{display:"grid",gridTemplateColumns:"80px 1fr 70px 100px 100px 1fr 32px",gap:6,marginBottom:12,alignItems:"end"}}>
+          <div><div style={{...lbl(),marginBottom:4}}>TIME ET</div><input type="text" placeholder="09:30" value={form.time} onChange={e=>upd("time",e.target.value)} style={iBase}/></div>
+          <div><div style={{...lbl(),marginBottom:4}}>EVENT</div><input type="text" placeholder="Event..." value={form.event} onChange={e=>upd("event",e.target.value)} style={iBase}/></div>
+          <div><div style={{...lbl(),marginBottom:4}}>IMPACT</div><select value={form.impact} onChange={e=>upd("impact",e.target.value)} style={selBase}>{["HIGH","MED","LOW"].map(i=><option key={i}>{i}</option>)}</select></div>
+          <div><div style={{...lbl(),marginBottom:4}}>EXPECTED</div><input type="text" value={form.expected} onChange={e=>upd("expected",e.target.value)} style={iBase}/></div>
+          <div><div style={{...lbl(),marginBottom:4}}>PRIOR</div><input type="text" value={form.prior} onChange={e=>upd("prior",e.target.value)} style={iBase}/></div>
+          <div><div style={{...lbl(),marginBottom:4}}>NOTES</div><input type="text" value={form.notes} onChange={e=>upd("notes",e.target.value)} style={iBase}/></div>
+          <button onClick={add} style={{background:"#EF535022",border:"1px solid #EF5350",color:"#EF5350",cursor:"pointer",borderRadius:4,fontFamily:mono,fontSize:18,height:32,marginTop:"auto"}}>+</button>
+        </div>
+        {items.length===0 && <div style={{fontFamily:mono,fontSize:10,color:"#1E2A32",padding:"6px 0"}}>NO EVENTS LOGGED</div>}
+        {items.map(it=>(
+          <div key={it.id} style={{display:"grid",gridTemplateColumns:"80px 1fr 70px 100px 100px 1fr 32px",gap:6,marginBottom:6,alignItems:"center"}}>
+            <div style={{fontFamily:mono,fontSize:11,color:"#546E7A",padding:"4px 8px",background:"#07090C",border:"1px solid #1a2530",borderRadius:3}}>{it.time}</div>
+            <div style={{fontFamily:mono,fontSize:11,color:"#B0BEC5",padding:"4px 8px",background:"#07090C",border:"1px solid #1a2530",borderRadius:3}}>{it.event}</div>
+            <div style={{fontFamily:mono,fontSize:11,color:NC[it.impact],padding:"4px 8px",background:"#07090C",border:`1px solid ${NC[it.impact]}44`,borderRadius:3,textAlign:"center"}}>{it.impact}</div>
+            <div style={{fontFamily:mono,fontSize:11,color:"#546E7A",padding:"4px 8px",background:"#07090C",border:"1px solid #1a2530",borderRadius:3}}>{it.expected||"—"}</div>
+            <div style={{fontFamily:mono,fontSize:11,color:"#546E7A",padding:"4px 8px",background:"#07090C",border:"1px solid #1a2530",borderRadius:3}}>{it.prior||"—"}</div>
+            <div style={{fontFamily:mono,fontSize:11,color:"#455A64",padding:"4px 8px",background:"#07090C",border:"1px solid #1a2530",borderRadius:3}}>{it.notes||"—"}</div>
+            <button onClick={()=>setItems(p=>p.filter(n=>n.id!==it.id))} style={{background:"transparent",border:"none",color:"#263238",cursor:"pointer",fontSize:16}}>×</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Session Input Panel ───────────────────────────────────────────────────────
+const SESSION_META = {
+  ASIAN:  { intent:"Find trades to execute DURING the Asian session (18:00–01:00 ET). You know prior day levels, ETH gap, globex action, and overnight inventory. Trades are typically range-plays off key levels or continuation of overnight direction.", knowable:"Prior day levels (PDH/PDL/VA), globex H/L, ETH gap, overnight inventory, VIX close, GEX regime, weekly/monthly VWAP.", tips:["Asian trades = range plays off PDH/PDL/VAH/VAL/Globex extremes","Watch inventory — net long above ON mid, net short below","GEX regime tells you if price will pin or trend","Targets typically 3–8pts, tighter stops due to lower volume"] },
+  LONDON: { intent:"Find trades to execute DURING the London session (02:00–08:30 ET). Asian range is now complete and known. London typically sweeps one Asian extreme before trending.", knowable:"Everything from Asian open + completed Asian H/L, Asian session character, whether Asian swept key levels, inventory into London.", tips:["Asian sweep-and-reverse is the highest probability London setup","If London opens outside Asian range, it often trends","VWAP reclaim/rejection at London open is a key inflection","Targets typically 5–15pts"] },
+  RTH:    { intent:"Find trades to execute DURING RTH (09:30–16:00 ET). Both Asian and London are complete — maximum context available. Synthesise overnight narrative, gap, VWAP stack, and auction structure.", knowable:"Everything — Asian + London context, full VWAP stack, gap analysis, GEX, macro, IB as it develops.", tips:["Gap context + VWAP stack + London direction = pre-open bias","IB width tells you if it's a trend day or rotation day","GEX flip level is key — above it price pins, below it trends","Targets typically 8–25pts"] },
+};
+
+const SESSION_FIELDS = {
+  ASIAN: [
+    { title:"OVERNIGHT / GLOBEX CONTEXT", color:"#4FC3F7", fields:[
+      {k:"globexChar",   label:"Globex character",      type:"sel", opts:["Trending up from RTH close","Trending down from RTH close","Tight range (low conviction)","Wide range (high vol)","Rotational / choppy","Single print move up","Single print move down"]},
+      {k:"overnightInv", label:"Overnight inventory",   type:"sel", opts:["Net Long — above ON midpoint (gap risk down)","Net Short — below ON midpoint (gap risk up)","Balanced — near ON midpoint"]},
+      {k:"asianTrend",   label:"Session character",     type:"sel", opts:["Trending up — holding higher","Trending down — holding lower","Tight range forming","Two-way / no conviction","Testing key level"]},
+      {k:"asianVsVwap",  label:"Price vs session VWAP", type:"sel", opts:["Above and holding","Below and holding","Oscillating around VWAP","Just crossed above","Just crossed below"]},
+      {k:"asianStructure",label:"Micro structure",      type:"sel", opts:["HH/HL — bullish","LH/LL — bearish","Equal highs (distribution)","Equal lows (accumulation)","No clear structure yet"]},
+      {k:"asianKeyTest", label:"Key level being tested",type:"sel", opts:["Probing VAH from below","Probing VAL from above","Testing PDH","Testing PDL","Testing Globex High","Testing Globex Low","Testing PD VWAP","No significant test yet"]},
+    ]},
+    { title:"VOLATILITY & GEX", color:"#CE93D8", fields:[
+      {k:"vixAtOpen",    label:"VIX level",             type:"num", step:"0.01"},
+      {k:"vixRegime",    label:"VIX regime",            type:"sel", opts:["<15 (low vol / pinned)","15–20 (normal)","20–25 (elevated)","25–30 (high)","30+ (extreme)"]},
+      {k:"gexFlipProx",  label:"Price vs GEX flip",     type:"sel", opts:["Well above flip (long gamma)","Near flip — transition zone","At flip level","Near flip from below","Well below flip (short gamma)"]},
+    ]},
+    { title:"NOTES & THESIS", color:"#37474F", fields:[
+      {k:"asianNotes",   label:"Session thesis",        type:"ta",  placeholder:"What is the narrative? What are you watching? Where is the trade if it sets up?"},
+    ]},
+  ],
+  LONDON: [
+    { title:"ASIAN SESSION HANDOFF (COMPLETED)", color:"#4FC3F7", fields:[
+      {k:"asianRangePts", label:"Asian range size (pts)", type:"num", step:"0.25"},
+      {k:"asianRangeCtx", label:"Range vs normal",       type:"sel", opts:["Very tight <5pts (London breakout likely)","Tight 5–8pts","Normal 8–15pts","Wide 15–25pts","Very wide >25pts (already moved)"]},
+      {k:"asianChar",     label:"Asian character",       type:"sel", opts:["Trended up — holding highs into London","Trended down — holding lows into London","Tight balanced range","Wide choppy range","Single sweep + reversal","Gradual grind up","Gradual grind down"]},
+      {k:"asianInventory",label:"Trader inventory",      type:"sel", opts:["Longs at Asian lows (squeeze risk up)","Shorts at Asian highs (squeeze risk down)","Balanced","Unclear"]},
+    ]},
+    { title:"LONDON OPEN REACTION", color:"#81C784", fields:[
+      {k:"lonSweep",      label:"Asian extreme swept",   type:"sel", opts:["Swept Asian High — watch reversal short","Swept Asian Low — watch reversal long","Swept both (stop hunt)","No sweep — may trend from open","Gradual push through Asian High","Gradual push through Asian Low"]},
+      {k:"lonTrend",      label:"London trend (30–45m)", type:"sel", opts:["Strong trending up","Weak / grinding up","Ranging — no clear direction","Weak / grinding down","Strong trending down","Reversing after sweep","Choppy / two-way"]},
+      {k:"lonVsVwap",     label:"Price vs London VWAP",  type:"sel", opts:["Above and holding","Below and holding","Oscillating (no conviction)","Just crossed above","Just crossed below"]},
+      {k:"lonStructure",  label:"London structure",      type:"sel", opts:["HH/HL — bullish","LH/LL — bearish","Equal highs (distribution)","Equal lows (accumulation)","Messy / no structure"]},
+      {k:"lonKeyBreak",   label:"Key level broken",      type:"sel", opts:["PDH reclaimed","PDH rejected","PDL broken","PDL rejected","VAH cleared","VAL lost","Globex High broken","Globex Low broken","PD VWAP reclaimed","PD VWAP lost","None yet"]},
+      {k:"nqAlignment",   label:"NQ / correlation",      type:"sel", opts:["NQ leading ES higher","ES + NQ in sync up","Indices diverging","ES + NQ in sync down","NQ leading ES lower","NQ weaker (rotation risk)"]},
+    ]},
+    { title:"VOLATILITY CONTEXT", color:"#CE93D8", fields:[
+      {k:"vixLondon",     label:"VIX at London open",    type:"num", step:"0.01"},
+      {k:"vixVsClose",    label:"VIX vs yesterday",      type:"sel", opts:["Up >1.5pts (fear rising)","Up 0.5–1.5pts","Flat ±0.5pts","Down 0.5–1.5pts","Down >1.5pts (fear falling)"]},
+      {k:"lonGexImpact",  label:"GEX impact",            type:"sel", opts:["Positive GEX — fade extremes / mean revert","Negative GEX — trend extension / breakouts","Flip level nearby — vol expansion risk","Neutral"]},
+    ]},
+    { title:"NOTES & THESIS", color:"#37474F", fields:[
+      {k:"lonNotes",      label:"London thesis",         type:"ta",  placeholder:"What did Asian set up? What is London doing with it? Where is the trade?"},
+    ]},
+  ],
+  RTH: [
+    { title:"OVERNIGHT NARRATIVE SUMMARY", color:"#FFB74D", fields:[
+      {k:"overnightSummary",label:"Overnight direction",   type:"sel", opts:["Trended higher all night — longs in control","Trended lower all night — shorts in control","Balanced — no clear bias","Sharp move up then stalled","Sharp move down then stalled","Wide range / rotational","Quiet / tight range all night"]},
+      {k:"londonDirection", label:"London direction",      type:"sel", opts:["London trended up — bullish handoff","London trended down — bearish handoff","London ranged — neutral handoff","London reversed overnight move","London extended overnight move"]},
+      {k:"overnightInv",    label:"Inventory into RTH",    type:"sel", opts:["Heavily long — gains (gap risk down)","Slightly long","Balanced","Slightly short","Heavily short — losses (gap risk up)"]},
+    ]},
+    { title:"RTH OPEN SETUP", color:"#FFB74D", fields:[
+      {k:"rthGap",          label:"Gap vs prior RTH close",type:"sel", opts:["Gap Up — unfilled (bulls in control)","Gap Up — filled in ETH","Gap Down — unfilled (bears in control)","Gap Down — filled in ETH","Flat open / no gap"]},
+      {k:"rthOpenDrive",    label:"Opening drive (9:30–9:45)",type:"sel", opts:["Strong bull impulse","Weak bull","Choppy two-way","Weak bear","Strong bear impulse","Gap fill attempt"]},
+      {k:"rthVwapStack",    label:"Price vs VWAP stack",   type:"sel", opts:["Above all VWAPs (strong bull — trend day candidate)","Above session + weekly only","Mixed — between VWAPs","Below session + weekly only","Below all VWAPs (strong bear — trend day candidate)"]},
+      {k:"rthPdVwap",       label:"Price vs PD VWAP close",type:"sel", opts:["Above PD VWAP close — acceptance above","At PD VWAP close — pivot","Below PD VWAP close — acceptance below"]},
+    ]},
+    { title:"AUCTION CONTEXT", color:"#FFB74D", fields:[
+      {k:"rthIB",           label:"Initial Balance",       type:"sel", opts:["Wide IB — trend day likely","Normal IB","Narrow IB — breakout likely","Not yet set"]},
+      {k:"rthDayType",      label:"Day type forming",      type:"sel", opts:["Trend Day","Normal Day","Normal Variation","Neutral Day","Double Distribution","Holiday / low volume"]},
+      {k:"asianRthContext", label:"Asian range as context",type:"sel", opts:["Asian High is resistance above","Asian Low is support below","Asian range inside key levels (irrelevant)","Asian High already swept by London","Asian Low already swept by London","Both Asian extremes swept (clean slate)"]},
+      {k:"londonRthContext",label:"London setup for RTH",  type:"sel", opts:["London trended up into VAH/PDH — continuation or fade","London trended down into VAL/PDL — continuation or fade","London ranged — RTH sets direction","London reversed — RTH confirming reversal","London set clean level for RTH entry"]},
+    ]},
+    { title:"NOTES & THESIS", color:"#37474F", fields:[
+      {k:"rthNotes",        label:"RTH trade plan",        type:"ta",  placeholder:"Synthesise Asian + London context. What is the primary narrative? What are the A+ setups?"},
+    ]},
+  ],
+};
+
+function SessionPanel({ session, data, setData }) {
+  const upd = (k,v) => setData(p=>({...p,[k]:v}));
+  const s = SESSIONS[session];
+  const meta = SESSION_META[session];
+  const schema = SESSION_FIELDS[session];
+  const [showTips, setShowTips] = useState(false);
+
+  return (
+    <div>
+      {/* Intent banner */}
+      <div style={{background:`${s.color}0d`,border:`1px solid ${s.color}33`,borderRadius:6,padding:"12px 16px",marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:12}}>
+          <div style={{flex:1}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+              <div style={{width:8,height:8,borderRadius:"50%",background:s.color,boxShadow:`0 0 6px ${s.color}`}}/>
+              <span style={{fontFamily:mono,fontSize:10,color:s.color,letterSpacing:3,fontWeight:700}}>{session} SESSION — TRADE SETUP BRIEF</span>
+              <span style={{fontFamily:mono,fontSize:9,color:"#37474F"}}>{s.hours}</span>
+            </div>
+            <div style={{fontFamily:mono,fontSize:10,color:"#546E7A",lineHeight:1.7}}>{meta.intent}</div>
+          </div>
+          <button onClick={()=>setShowTips(p=>!p)} style={{background:"transparent",border:`1px solid ${s.color}44`,color:s.color,fontFamily:mono,fontSize:9,padding:"4px 10px",cursor:"pointer",borderRadius:2,letterSpacing:1,flexShrink:0}}>
+            {showTips?"HIDE TIPS":"TIPS"}
+          </button>
+        </div>
+        {showTips && (
+          <div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${s.color}22`}}>
+            <div style={{...lbl("#37474F"),marginBottom:6}}>KNOWABLE AT {session} OPEN: {meta.knowable}</div>
+            {meta.tips.map((t,i)=>(
+              <div key={i} style={{display:"flex",gap:8,marginBottom:4}}>
+                <span style={{color:s.color,fontSize:10}}>›</span>
+                <span style={{fontFamily:mono,fontSize:10,color:"#455A64",lineHeight:1.5}}>{t}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div style={card}>
+        <div style={{padding:"14px 16px",display:"grid",gridTemplateColumns:"1fr 1fr",gap:24}}>
+          {schema.map(g=>(
+            <div key={g.title} style={{gridColumn:g.fields.some(f=>f.type==="ta")?"1 / -1":"auto"}}>
+              <Section title={g.title} color={g.color}>
+                {g.fields.map(f=>(
+                  <Row key={f.k} label={f.label}>
+                    {f.type==="sel" && <Sel value={data[f.k]} onChange={v=>upd(f.k,v)} opts={f.opts}/>}
+                    {f.type==="num" && <NumInput value={data[f.k]} onChange={v=>upd(f.k,v)} step={f.step||"0.25"}/>}
+                    {f.type==="ta"  && <textarea value={data[f.k]||""} onChange={e=>upd(f.k,e.target.value)} placeholder={f.placeholder||"Notes..."} style={taBase} rows={3}/>}
+                  </Row>
+                ))}
+              </Section>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Checklist ─────────────────────────────────────────────────────────────────
+const CHECKLISTS = {
+  ASIAN: ["Note Asian H/L range and character","Identify inventory vs PDC / ON midpoint","Mark ETH gap and fill status","Record all VWAP levels and price relationship","Assess GEX regime and flip proximity","Note VIX level and trend","Identify any key level tests forming","Log session thesis in notes"],
+  LONDON: ["Assess completed Asian range size","Note Asian inventory into London","London open reaction vs Asian range","First 30m trend direction / structure","Asian extreme swept? (high prob setup)","VWAP relationship at London open","Key level broken or rejected?","NQ/YM alignment check"],
+  RTH: ["Gap analysis — fill or continuation?","Price vs PDH/PDL/VAH/VAL confirmed","Full VWAP stack plotted and assessed","GEX flip level identified","IB high/low set (9:30–10:30)","Day type forming — trend or rotation?","News/event time logged","Prop risk params confirmed","Opening drive bias noted","London trend context applied"],
+};
+
+function Checklist({ checked, setChecked }) {
+  const [active, setActive] = useState("RTH");
+  const tog = (s,i) => setChecked(p=>({...p,[`${s}-${i}`]:!p[`${s}-${i}`]}));
+  const prog = s => ({ d:CHECKLISTS[s].filter((_,i)=>checked[`${s}-${i}`]).length, t:CHECKLISTS[s].length });
+  return (
+    <div style={card}>
+      <div style={cardHead()}><span style={lbl("#FFB74D")}>PRE-MARKET CHECKLIST</span></div>
+      <div style={{display:"flex",borderBottom:"1px solid #1E2A32"}}>
+        {Object.entries(SESSIONS).map(([k,s])=>{
+          const {d,t}=prog(k); const ia=active===k;
+          return (
+            <button key={k} onClick={()=>setActive(k)} style={{flex:1,padding:"8px 12px",border:"none",cursor:"pointer",background:ia?s.dim:"transparent",borderBottom:ia?`2px solid ${s.color}`:"2px solid transparent"}}>
+              <div style={{fontFamily:mono,fontSize:10,color:ia?s.color:"#37474F",letterSpacing:2}}>{k}</div>
+              <div style={{fontFamily:mono,fontSize:9,color:d===t?"#66BB6A":"#37474F",marginTop:2}}>{d}/{t}</div>
+            </button>
+          );
+        })}
+      </div>
+      <div style={{padding:16}}>
+        {CHECKLISTS[active].map((item,i)=>{
+          const done=checked[`${active}-${i}`];
+          return (
+            <div key={i} onClick={()=>tog(active,i)} style={{display:"flex",alignItems:"flex-start",gap:10,marginBottom:10,cursor:"pointer",opacity:done?0.4:1}}>
+              <div style={{width:14,height:14,border:`1px solid ${done?SESSIONS[active].color:"#1E2A32"}`,borderRadius:2,flexShrink:0,marginTop:1,background:done?SESSIONS[active].color:"transparent",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                {done && <span style={{color:"#000",fontSize:9,fontWeight:900}}>✓</span>}
+              </div>
+              <span style={{fontFamily:mono,fontSize:11,color:done?"#263238":"#78909C",textDecoration:done?"line-through":"none",lineHeight:1.5}}>{item}</span>
+            </div>
+          );
+        })}
+        <button onClick={()=>CHECKLISTS[active].forEach((_,i)=>setChecked(p=>({...p,[`${active}-${i}`]:false})))}
+          style={{background:"transparent",border:"1px solid #1E2A32",color:"#263238",fontFamily:mono,fontSize:9,padding:"4px 10px",cursor:"pointer",borderRadius:2,letterSpacing:1,marginTop:4}}>
+          RESET SESSION
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── AI Analysis ───────────────────────────────────────────────────────────────
+function AIAnalysis({ session, levels, vwap, volProfile, options, macro, sessionData, newsItems, price, openPrice }) {
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  // Auto-calculate all price relationships to include in prompt
+  const combinedLevels = { ...levels, ...vwap };
+  const priceRels = price ? calcRelationships(price, combinedLevels) : [];
+  const openRels  = openPrice ? calcRelationships(openPrice, combinedLevels) : [];
+
+  const buildPrompt = () => {
+    const s = SESSIONS[session];
+    const meta = SESSION_META[session];
+    const filled = obj => Object.entries(obj).filter(([,v])=>v).map(([k,v])=>`${k}: ${v}`).join("\n");
+
+    return `You are an institutional ES futures analyst specialising in order flow and auction market theory. Generate a trading brief for finding trades DURING the ${session} session (${s.hours}).
+
+SESSION INTENT: ${meta.intent}
+KNOWABLE AT ${session} OPEN: ${meta.knowable}
+
+Strategy guidance:
+- ASIAN: Range plays off key levels, fades at overnight highs/lows, continuation of overnight direction. Targets 3-8pts. Tighter stops, lower volume.
+- LONDON: Sweep-and-reverse off Asian extremes (high probability), VWAP reclaim/reject, directional breakout. Targets 5-15pts.
+- RTH: Gap fill, IB extension, VWAP reclaim/reject, trend day breakouts. Targets 8-25pts.
+
+## KEY LEVELS
+${Object.entries(levels).filter(([,v])=>v).map(([k,v])=>`${k}: ${v}`).join("\n") || "Not provided"}
+
+## VWAP LEVELS
+${Object.entries(vwap).filter(([k,v])=>v && !k.endsWith("_note") && !k.endsWith("_rel")).map(([k,v])=>`${k}: ${v}`).join("\n") || "Not provided"}
+
+## AUTO-CALCULATED PRICE RELATIONSHIPS
+Current Price (${price||"not set"}):
+${priceRels.map(r=>r.text).join("\n") || "Price not entered"}
+
+Session Open Price (${openPrice||"not set"}):
+${openRels.map(r=>r.text).join("\n") || "Open price not entered"}
+
+## VOLUME PROFILE
+Prior Week POC:${volProfile.pwPoc||"?"} VAH:${volProfile.pwVah||"?"} VAL:${volProfile.pwVal||"?"} Shape:${volProfile.pwShape||"?"}
+Current Week POC:${volProfile.cwPoc||"?"} VAH:${volProfile.cwVah||"?"} VAL:${volProfile.cwVal||"?"} Shape:${volProfile.cwShape||"?"} Trend:${volProfile.cwTrend||"?"}
+Prior Day Shape:${volProfile.pdShape||"?"} Day Type:${volProfile.pdDayType||"?"}
+HVN1:${volProfile.hvn1||"?"} HVN2:${volProfile.hvn2||"?"} LVN1:${volProfile.lvn1||"?"} LVN2:${volProfile.lvn2||"?"}
+
+## OPTIONS & DERIVATIVES
+GEX Regime:${options.gexRegime||"?"} | GEX Flip:${options.gexFlip||"?"} | Call Wall:${options.callWall||"?"} | Put Wall:${options.putWall||"?"}
+Dealer Positioning:${options.dealerPos||"?"}
+VIX:${options.vix||"?"} | VIX Regime:${options.vixRegime||"?"} | VIX Trend:${options.vixTrend||"?"}
+VVIX:${options.vvix||"?"} | IV Rank:${options.ivRank||"?"} | P/C Ratio:${options.putCallRatio||"?"} | 0DTE:${options.zeroDteFlow||"?"}
+Term Structure:${options.termStructure||"?"}
+
+## MACRO & SENTIMENT
+ES Pre-mkt:${macro.esChange||"?"}% | NQ:${macro.nqAlign||"?"} | YM:${macro.ymAlign||"?"} | RTY:${macro.rtyAlign||"?"}
+DXY:${macro.dxy||"?"} | 10Y Yield:${macro.tenYield||"?"} (${macro.yieldTrend||"?"})
+Sector Rotation:${macro.sectorRotation||"?"} | Fear/Greed:${macro.fearGreed||"?"}
+News Risk:${macro.newsRisk||"?"} | Event:${macro.newsEvent||"?"} at ${macro.newsTime||"?"}
+
+## SESSION-SPECIFIC CONTEXT (${session})
+${filled(sessionData)}
+
+## SCHEDULED EVENTS
+${newsItems.length ? newsItems.map(n=>`${n.time} ${n.event} [${n.impact}] exp:${n.expected||"?"} prev:${n.prior||"?"} ${n.notes||""}`).join("\n") : "None"}
+
+---
+
+Respond ONLY with valid JSON, no markdown, no preamble:
+{
+  "bias": "BULLISH|BEARISH|NEUTRAL|WAIT",
+  "confidence": 1-10,
+  "confidence_reason": "why this confidence level",
+  "primary_narrative": "2-3 sentence core thesis",
+  "key_context": ["point 1","point 2","point 3","point 4"],
+  "strategies": [
+    {
+      "name": "strategy name",
+      "type": "LONG|SHORT|FADE|BREAKOUT|RANGE",
+      "setup": "specific entry condition",
+      "entry_zone": "price level or condition",
+      "target_1": "first target",
+      "target_2": "second target",
+      "stop": "stop condition",
+      "invalidator": "what cancels this setup"
+    }
+  ],
+  "levels_to_watch": [
+    {"level": "price or description", "significance": "why it matters", "bias": "bull|bear|neutral"}
+  ],
+  "thesis_invalidators": ["condition 1","condition 2","condition 3"],
+  "risk_notes": "risk factors, news sensitivity, vol regime implications",
+  "market_regime": "brief market regime characterisation"
+}`;
+  };
+
+  const analyze = async () => {
+    setLoading(true); setError(null); setResult(null);
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:2000, messages:[{role:"user",content:buildPrompt()}] })
+      });
+      const d = await res.json();
+      if (d.error) throw new Error(d.error.message || JSON.stringify(d.error));
+      const text = d.content?.map(c=>c.text||"").join("") || "";
+      const parsed = JSON.parse(text.replace(/```json|```/g,"").trim());
+      setResult(parsed);
+    } catch(e) {
+      setError(`Analysis failed: ${e.message}`);
+    }
+    setLoading(false);
+  };
+
+  const s = SESSIONS[session];
+  const stratColors = {LONG:"#66BB6A",SHORT:"#EF5350",FADE:"#FFA726",BREAKOUT:"#4FC3F7",RANGE:"#CE93D8"};
+
+  return (
+    <div style={card}>
+      <div style={{...cardHead(),borderLeft:`3px solid ${s.color}`}}>
+        <span style={lbl(s.color)}>AI SESSION ANALYSIS — {session}</span>
+        {result && (
+          <div style={{display:"flex",alignItems:"center",gap:12}}>
+            <span style={lbl()}>CONFIDENCE</span>
+            <div style={{display:"flex",gap:2}}>
+              {[...Array(10)].map((_,i)=><div key={i} style={{width:8,height:8,borderRadius:1,background:i<(result.confidence||0)?BC[result.bias]||"#546E7A":"#1E2A32"}}/>)}
+            </div>
+            <span style={{fontFamily:mono,fontSize:10,color:BC[result.bias]||"#546E7A"}}>{result.confidence}/10</span>
+          </div>
+        )}
+      </div>
+      <div style={{padding:"16px"}}>
+        {!result && !loading && (
+          <div style={{textAlign:"center",padding:"32px 0"}}>
+            <div style={{fontFamily:mono,fontSize:11,color:"#37474F",marginBottom:16}}>Fill in market data and session context, then generate analysis.</div>
+            <button onClick={analyze} style={{background:`${s.color}22`,border:`1px solid ${s.color}`,color:s.color,fontFamily:mono,fontSize:11,padding:"10px 28px",cursor:"pointer",borderRadius:3,letterSpacing:2}}>
+              ▶ GENERATE {session} ANALYSIS
+            </button>
+          </div>
+        )}
+        {loading && (
+          <div style={{textAlign:"center",padding:"32px 0"}}>
+            <div style={{fontFamily:mono,fontSize:11,color:s.color,letterSpacing:3,animation:"fadeIn 1s infinite alternate"}}>ANALYZING MARKET CONDITIONS...</div>
+            <style>{`@keyframes fadeIn{from{opacity:0.2}to{opacity:1}}`}</style>
+          </div>
+        )}
+        {error && <div style={{fontFamily:mono,fontSize:11,color:"#EF5350",padding:"12px 0",whiteSpace:"pre-wrap"}}>{error}</div>}
+        {result && (
+          <div>
+            <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:20,padding:"14px 18px",background:`${BC[result.bias]}11`,border:`1px solid ${BC[result.bias]}44`,borderRadius:4}}>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:40,color:BC[result.bias],letterSpacing:4,lineHeight:1}}>{result.bias}</div>
+              <div style={{flex:1}}>
+                <div style={{fontFamily:mono,fontSize:11,color:"#B0BEC5",lineHeight:1.6}}>{result.primary_narrative}</div>
+                <div style={{fontFamily:mono,fontSize:9,color:"#37474F",marginTop:6}}>{result.market_regime}</div>
+              </div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
+              <div>
+                <div style={{...lbl("#4FC3F7"),marginBottom:10}}>KEY CONTEXT</div>
+                {(result.key_context||[]).map((pt,i)=>(
+                  <div key={i} style={{display:"flex",gap:8,marginBottom:8}}>
+                    <div style={{width:16,height:16,borderRadius:2,background:`${s.color}22`,border:`1px solid ${s.color}44`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontFamily:mono,fontSize:9,color:s.color}}>{i+1}</div>
+                    <div style={{fontFamily:mono,fontSize:11,color:"#78909C",lineHeight:1.5}}>{pt}</div>
+                  </div>
+                ))}
+              </div>
+              <div>
+                <div style={{...lbl("#EF5350"),marginBottom:10}}>THESIS INVALIDATORS</div>
+                {(result.thesis_invalidators||[]).map((inv,i)=>(
+                  <div key={i} style={{display:"flex",gap:8,marginBottom:8}}>
+                    <div style={{color:"#EF5350",fontFamily:mono,fontSize:11,flexShrink:0}}>✕</div>
+                    <div style={{fontFamily:mono,fontSize:11,color:"#78909C",lineHeight:1.5}}>{inv}</div>
+                  </div>
+                ))}
+                <div style={{...lbl("#FFA726"),marginBottom:8,marginTop:14}}>RISK NOTES</div>
+                <div style={{fontFamily:mono,fontSize:11,color:"#546E7A",lineHeight:1.6}}>{result.risk_notes}</div>
+                {result.confidence_reason && (
+                  <div style={{marginTop:10,padding:"8px 10px",background:"#07090C",border:"1px solid #1a2530",borderRadius:3}}>
+                    <div style={{...lbl("#263238"),marginBottom:4}}>CONFIDENCE BASIS</div>
+                    <div style={{fontFamily:mono,fontSize:10,color:"#455A64"}}>{result.confidence_reason}</div>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div style={{...lbl("#81C784"),marginBottom:10}}>POTENTIAL STRATEGIES</div>
+            <div style={{display:"grid",gridTemplateColumns:`repeat(${Math.min((result.strategies||[]).length,3)},1fr)`,gap:12,marginBottom:16}}>
+              {(result.strategies||[]).map((st,i)=>(
+                <div key={i} style={{background:"#07090C",border:`1px solid ${stratColors[st.type]||"#1E2A32"}44`,borderRadius:4,padding:14}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                    <div style={{padding:"2px 8px",background:`${stratColors[st.type]||"#546E7A"}22`,border:`1px solid ${stratColors[st.type]||"#546E7A"}66`,borderRadius:2,fontFamily:mono,fontSize:9,color:stratColors[st.type]||"#546E7A",letterSpacing:2}}>{st.type}</div>
+                    <div style={{fontFamily:mono,fontSize:11,color:"#B0BEC5"}}>{st.name}</div>
+                  </div>
+                  {[{l:"SETUP",v:st.setup,c:"#78909C"},{l:"ENTRY",v:st.entry_zone,c:"#CFD8DC"},{l:"TARGET 1",v:st.target_1,c:"#66BB6A"},{l:"TARGET 2",v:st.target_2,c:"#4FC3F7"},{l:"STOP",v:st.stop,c:"#EF5350"},{l:"INVALIDATOR",v:st.invalidator,c:"#FFA726"}].map(r=>(
+                    <div key={r.l} style={{display:"grid",gridTemplateColumns:"72px 1fr",gap:6,marginBottom:5}}>
+                      <div style={{fontFamily:mono,fontSize:9,color:"#263238",letterSpacing:1}}>{r.l}</div>
+                      <div style={{fontFamily:mono,fontSize:10,color:r.c,lineHeight:1.4}}>{r.v||"—"}</div>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+            <div style={{...lbl("#CE93D8"),marginBottom:10}}>LEVELS TO WATCH</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:16}}>
+              {(result.levels_to_watch||[]).map((lv,i)=>(
+                <div key={i} style={{padding:"8px 12px",background:"#07090C",border:`1px solid ${lv.bias==="bull"?"#66BB6A44":lv.bias==="bear"?"#EF535044":"#1a2530"}`,borderRadius:3,flex:"1 1 200px"}}>
+                  <div style={{fontFamily:mono,fontSize:13,color:lv.bias==="bull"?"#66BB6A":lv.bias==="bear"?"#EF5350":"#78909C",marginBottom:4}}>{lv.level}</div>
+                  <div style={{fontFamily:mono,fontSize:10,color:"#455A64"}}>{lv.significance}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{textAlign:"right"}}>
+              <button onClick={analyze} style={{background:"transparent",border:"1px solid #1E2A32",color:"#37474F",fontFamily:mono,fontSize:9,padding:"5px 12px",cursor:"pointer",borderRadius:2,letterSpacing:2}}>↺ RE-ANALYZE</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+export default function App() {
+  const [session,     setSession]     = useState("RTH");
+  const [price,       setPrice]       = useState("");
+  const [openPrice,   setOpenPrice]   = useState("");
+  const [levels,      setLevels]      = useState({});
+  const [vwap,        setVwap]        = useState({});
+  const [volProfile,  setVolProfile]  = useState({});
+  const [options,     setOptions]     = useState({});
+  const [macro,       setMacro]       = useState({});
+  const [sessionData, setSessionData] = useState({});
+  const [newsItems,   setNewsItems]   = useState([]);
+  const [checked,     setChecked]     = useState({});
+  const [activeTab,   setActiveTab]   = useState("data");
+
+  const resetDay = () => {
+    if (!window.confirm("Reset all data for new trading day?")) return;
+    setPrice(""); setOpenPrice(""); setLevels({}); setVwap({}); setVolProfile({});
+    setOptions({}); setMacro({}); setSessionData({}); setNewsItems([]); setChecked({});
+  };
+
+  const totalChecks = Object.values(CHECKLISTS).flat().length;
+  const doneChecks  = Object.values(checked).filter(Boolean).length;
+  const s = SESSIONS[session];
+
+  const combinedLevels = { ...levels, ...vwap };
+
+  const TABS = [
+    {k:"data",     label:"MARKET DATA"},
+    {k:"session",  label:`${session} SESSION`},
+    {k:"analysis", label:"AI ANALYSIS"},
+    {k:"checklist",label:"CHECKLIST"},
+  ];
+
+  return (
+    <div style={{minHeight:"100vh",background:"#060A0D",color:"#90A4AE",fontFamily:mono}}>
+      {/* Header */}
+      <div style={{borderBottom:"1px solid #1E2A32",padding:"14px 24px",display:"flex",alignItems:"center",justifyContent:"space-between",background:"#080C10",position:"sticky",top:0,zIndex:100}}>
+        <div>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,color:"#E0E0E0",letterSpacing:5,lineHeight:1}}>PRE-MARKET ANALYSIS</div>
+          <div style={{fontFamily:mono,fontSize:9,color:"#263238",letterSpacing:4,marginTop:3}}>ES FUTURES · {doneChecks}/{totalChecks} CHECKS · {session} ACTIVE</div>
+        </div>
+        <div style={{display:"flex",gap:6}}>
+          {Object.entries(SESSIONS).map(([k,sv])=>(
+            <button key={k} onClick={()=>setSession(k)} style={{padding:"8px 18px",border:`1px solid ${session===k?sv.color:"#1E2A32"}`,background:session===k?sv.dim:"transparent",color:session===k?sv.color:"#37474F",fontFamily:mono,fontSize:10,letterSpacing:3,cursor:"pointer",borderRadius:3,transition:"all 0.15s",position:"relative"}}>
+              {session===k && <div style={{position:"absolute",top:0,left:0,right:0,height:2,background:sv.color,borderRadius:"3px 3px 0 0"}}/>}
+              <div>{sv.label}</div>
+              <div style={{fontSize:8,color:session===k?sv.color+"99":"#263238",marginTop:2}}>{sv.hours}</div>
+            </button>
+          ))}
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:16}}>
+          <Clock/>
+          <button onClick={resetDay} style={{background:"transparent",border:"1px solid #1E2A32",color:"#37474F",fontFamily:mono,fontSize:9,padding:"6px 12px",cursor:"pointer",borderRadius:2,letterSpacing:2}}>NEW DAY ↺</button>
+        </div>
+      </div>
+
+      {/* Price inputs — always visible */}
+      <div style={{background:"#080C10",borderBottom:"1px solid #1E2A32",padding:"10px 24px",display:"flex",alignItems:"center",gap:16}}>
+        <div style={{fontFamily:mono,fontSize:9,color:"#37474F",letterSpacing:3,flexShrink:0}}>PRICES</div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <div style={{fontFamily:mono,fontSize:9,color:"#546E7A",width:90}}>CURRENT</div>
+          <input type="number" step="0.25" value={price} onChange={e=>setPrice(e.target.value)} placeholder="—"
+            style={{...iBase,width:110,textAlign:"right",color:"#FFFFFF",fontSize:14,padding:"4px 10px"}}/>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <div style={{fontFamily:mono,fontSize:9,color:"#546E7A",width:110}}>SESSION OPEN</div>
+          <input type="number" step="0.25" value={openPrice} onChange={e=>setOpenPrice(e.target.value)} placeholder="—"
+            style={{...iBase,width:110,textAlign:"right",color:s.color,fontSize:14,padding:"4px 10px"}}/>
+        </div>
+        {price && combinedLevels.vah && (
+          <div style={{fontFamily:mono,fontSize:10,color:parseFloat(price)>parseFloat(combinedLevels.vah)?"#66BB6A":parseFloat(price)<parseFloat(combinedLevels.val)?"#EF5350":"#FFA726"}}>
+            {parseFloat(price)>parseFloat(combinedLevels.vah)?"↑ ABOVE VAH":parseFloat(price)<parseFloat(combinedLevels.val)?"↓ BELOW VAL":"↔ INSIDE VA"}
+            {combinedLevels.poc && ` | ${(parseFloat(price)-parseFloat(combinedLevels.poc))>0?"+":""}${(parseFloat(price)-parseFloat(combinedLevels.poc)).toFixed(2)} vs POC`}
+          </div>
+        )}
+      </div>
+
+      {/* Tabs */}
+      <div style={{display:"flex",borderBottom:"1px solid #1E2A32",background:"#080C10",paddingLeft:24}}>
+        {TABS.map(t=>(
+          <button key={t.k} onClick={()=>setActiveTab(t.k)} style={{padding:"10px 18px",border:"none",cursor:"pointer",background:"transparent",borderBottom:activeTab===t.k?`2px solid ${s.color}`:"2px solid transparent",fontFamily:mono,fontSize:10,letterSpacing:2,color:activeTab===t.k?s.color:"#37474F"}}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{padding:"20px 24px"}}>
+        {activeTab==="data" && (
+          <div>
+            <PriceSnapshot price={price} setPrice={setPrice} openPrice={openPrice} setOpenPrice={setOpenPrice} levels={{...levels,...vwap}} vwap={vwap}/>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+              <KeyLevels levels={levels} setLevels={setLevels}/>
+              <VwapPanel data={vwap} setData={setVwap}/>
+            </div>
+            <VolumeProfilePanel data={volProfile} setData={setVolProfile}/>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+              <OptionsPanel data={options} setData={setOptions}/>
+              <MacroPanel data={macro} setData={setMacro}/>
+            </div>
+            <NewsPanel items={newsItems} setItems={setNewsItems}/>
+          </div>
+        )}
+        {activeTab==="session"   && <SessionPanel session={session} data={sessionData} setData={setSessionData}/>}
+        {activeTab==="analysis"  && <AIAnalysis session={session} levels={levels} vwap={vwap} volProfile={volProfile} options={options} macro={macro} sessionData={sessionData} newsItems={newsItems} price={price} openPrice={openPrice}/>}
+        {activeTab==="checklist" && <Checklist checked={checked} setChecked={setChecked}/>}
+      </div>
+    </div>
+  );
+}
