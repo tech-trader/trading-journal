@@ -3,10 +3,14 @@
 //  ATAS Custom Indicator
 //
 //  Displays an on-chart table containing:
-//    • Previous Day RTH  – VAH, VAL, VPOC, High, Low, Close
-//    • Previous Sessions  – Asian High/Low, London High/Low
-//    • Previous Week     – VAH, VAL, VPOC, High, Low
-//    • Current Week      – VAH, VAL, VPOC, High, Low
+//    • Previous Day RTH       – VAH, VAL, VPOC, High, Low, Close
+//    • Globex (overnight)     – High, Low
+//    • Today Asian Session    – High, Low
+//    • Today London Session   – High, Low
+//    • Previous Asian Session – High, Low
+//    • Previous London Session– High, Low
+//    • Previous Week          – VAH, VAL, VPOC, High, Low
+//    • Current Week           – VAH, VAL, VPOC, High, Low
 //
 //  Volume profile (VAH / VAL / VPOC) is calculated by
 //  distributing each bar's volume proportionally across its
@@ -56,6 +60,11 @@ namespace ATAS.Indicators.Custom
 
         // Previous sessions
         private decimal _asianHigh, _asianLow, _londonHigh, _londonLow;
+
+        // Current day sessions
+        private decimal _globexHigh, _globexLow;
+        private decimal _curAsianHigh, _curAsianLow;
+        private decimal _curLondonHigh, _curLondonLow;
 
         // Previous week
         private decimal _pwVah, _pwVal, _pwVpoc, _pwHigh, _pwLow;
@@ -148,6 +157,9 @@ namespace ATAS.Indicators.Custom
 
         [Display(Name = "London Session End (ET Min)",   GroupName = "Sessions (ET)", Order = 28)]
         [Range(0, 59)] public int LondonEndMinute { get; set; } = 30;
+
+        [Display(Name = "Globex Start (ET Hour)",        GroupName = "Sessions (ET)", Order = 29)]
+        [Range(0, 23)] public int GlobexStartHour { get; set; } = 18;
         #endregion
 
         #region  Volume Profile
@@ -232,6 +244,7 @@ namespace ATAS.Indicators.Custom
 
             CalcPrevDayRth(bars, today);
             CalcPrevSessions(bars, today);
+            CalcCurrentDaySessions(bars, today);
             CalcWeekly(bars, today);
         }
 
@@ -296,6 +309,59 @@ namespace ATAS.Indicators.Custom
             {
                 _londonHigh = londonBars.Max(b => b.c.High);
                 _londonLow  = londonBars.Min(b => b.c.Low);
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        //  Current day sessions  (Globex, Asian, London — for today's trade date)
+        // ─────────────────────────────────────────────────────────────────────
+
+        private void CalcCurrentDaySessions(List<(DateTime et, IndicatorCandle c)> bars, DateTime today)
+        {
+            // The overnight/globex window starts on the previous *calendar* day at
+            // GlobexStartHour and runs until today's RTH open.  We use the calendar
+            // day (today.AddDays(-1)) rather than PrevTradingDay so that Sunday
+            // evening futures data is captured for Monday's trade date.
+            var prevCalDay  = today.AddDays(-1);
+            var rthOpen     = new TimeSpan(RthStartHour,   RthStartMinute, 0);
+            var londonStart = new TimeSpan(LondonStartHour, 0,              0);
+            var londonEnd   = new TimeSpan(LondonEndHour,   LondonEndMinute, 0);
+
+            // ── Globex (overnight): prevCalDay GlobexStart → today RTH open ──
+            var globexBars = bars.Where(b =>
+                (b.et.Date == prevCalDay && b.et.Hour >= GlobexStartHour) ||
+                (b.et.Date == today      && b.et.TimeOfDay < rthOpen)
+            ).ToList();
+
+            if (globexBars.Count > 0)
+            {
+                _globexHigh = globexBars.Max(b => b.c.High);
+                _globexLow  = globexBars.Min(b => b.c.Low);
+            }
+
+            // ── Current day Asian: prevCalDay AsianStart → today AsianEnd ──
+            var curAsianBars = bars.Where(b =>
+                (b.et.Date == prevCalDay && b.et.Hour >= AsianStartHour) ||
+                (b.et.Date == today      && b.et.Hour <  AsianEndHour)
+            ).ToList();
+
+            if (curAsianBars.Count > 0)
+            {
+                _curAsianHigh = curAsianBars.Max(b => b.c.High);
+                _curAsianLow  = curAsianBars.Min(b => b.c.Low);
+            }
+
+            // ── Current day London: today LondonStart → today LondonEnd ──
+            var curLondonBars = bars.Where(b =>
+                b.et.Date      == today      &&
+                b.et.TimeOfDay >= londonStart &&
+                b.et.TimeOfDay <  londonEnd
+            ).ToList();
+
+            if (curLondonBars.Count > 0)
+            {
+                _curLondonHigh = curLondonBars.Max(b => b.c.High);
+                _curLondonLow  = curLondonBars.Min(b => b.c.Low);
             }
         }
 
@@ -510,6 +576,36 @@ namespace ATAS.Indicators.Custom
             },
             new TableSection
             {
+                Title       = "◈  GLOBEX  (18:00–09:30 ET)",
+                HeaderColor = Color.FromArgb(200, 45, 20, 65),
+                Rows        = new List<TableRow>
+                {
+                    new() { Label = "High", Value = _globexHigh, ValueColor = Color.Empty },
+                    new() { Label = "Low",  Value = _globexLow,  ValueColor = Color.Empty },
+                }
+            },
+            new TableSection
+            {
+                Title       = "◈  TODAY ASIAN  (18:00–01:00 ET)",
+                HeaderColor = Color.FromArgb(200, 10, 50, 90),
+                Rows        = new List<TableRow>
+                {
+                    new() { Label = "High", Value = _curAsianHigh, ValueColor = Color.Empty },
+                    new() { Label = "Low",  Value = _curAsianLow,  ValueColor = Color.Empty },
+                }
+            },
+            new TableSection
+            {
+                Title       = "◈  TODAY LONDON  (02:00–08:30 ET)",
+                HeaderColor = Color.FromArgb(200,  8, 70, 45),
+                Rows        = new List<TableRow>
+                {
+                    new() { Label = "High", Value = _curLondonHigh, ValueColor = Color.Empty },
+                    new() { Label = "Low",  Value = _curLondonLow,  ValueColor = Color.Empty },
+                }
+            },
+            new TableSection
+            {
                 Title       = "◈  PREV ASIAN  (18:00–01:00 ET)",
                 HeaderColor = Color.FromArgb(200, 10, 40, 72),
                 Rows        = new List<TableRow>
@@ -588,6 +684,9 @@ namespace ATAS.Indicators.Custom
         {
             _pdVah = _pdVal = _pdVpoc = _pdHigh = _pdLow = _pdClose = 0m;
             _asianHigh = _asianLow = _londonHigh = _londonLow = 0m;
+            _globexHigh = _globexLow = 0m;
+            _curAsianHigh = _curAsianLow = 0m;
+            _curLondonHigh = _curLondonLow = 0m;
             _pwVah = _pwVal = _pwVpoc = _pwHigh = _pwLow = 0m;
             _cwVah = _cwVal = _cwVpoc = _cwHigh = _cwLow = 0m;
         }
