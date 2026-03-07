@@ -428,7 +428,7 @@ namespace ATAS.Indicators.Custom
         private void DrawTable(RenderContext context)
         {
             var font     = new RenderFont("Consolas", FontSize);
-            var boldFont = new RenderFont("Consolas", FontSize, true);
+            var boldFont = new RenderFont("Consolas", FontSize, FontStyle.Bold);
 
             int rowH       = FontSize + 9;
             int padX       = 6;
