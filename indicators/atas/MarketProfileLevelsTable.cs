@@ -428,7 +428,7 @@ namespace ATAS.Indicators.Custom
         private void DrawTable(RenderContext context)
         {
             var font     = new RenderFont("Consolas", FontSize);
-            var boldFont = new RenderFont("Consolas", FontSize, bold: true);
+            var boldFont = new RenderFont("Consolas", FontSize, true);
 
             int rowH       = FontSize + 9;
             int padX       = 6;
@@ -454,7 +454,7 @@ namespace ATAS.Indicators.Custom
                 var headerRect = new Rectangle(x + 1, curY, tableW - 2, rowH);
                 context.FillRectangle(section.HeaderColor, headerRect);
                 context.DrawString(section.Title, boldFont, TextColor,
-                    x + padX, curY + (rowH - FontSize) / 2f);
+                    x + padX, curY + (rowH - FontSize) / 2);
                 curY += rowH;
 
                 // Separator under header
@@ -470,13 +470,13 @@ namespace ATAS.Indicators.Custom
 
                     // Label
                     context.DrawString(row.Label, font, LabelColor,
-                        x + padX, curY + (rowH - FontSize) / 2f);
+                        x + padX, curY + (rowH - FontSize) / 2);
 
                     // Value
                     string valStr  = row.Value > 0m ? row.Value.ToString("F2") : "—";
                     Color  valCol  = row.ValueColor != Color.Empty ? row.ValueColor : TextColor;
                     context.DrawString(valStr, font, valCol,
-                        x + LabelColumnWidth + padX, curY + (rowH - FontSize) / 2f);
+                        x + LabelColumnWidth + padX, curY + (rowH - FontSize) / 2);
 
                     curY += rowH;
                     alt   = !alt;
