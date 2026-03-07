@@ -147,13 +147,13 @@ namespace ATAS.Indicators.Custom
         [Range(0, 23)] public int AsianStartHour  { get; set; } = 18;
 
         [Display(Name = "Asian Session End (ET Hour)",   GroupName = "Sessions (ET)", Order = 25)]
-        [Range(0, 23)] public int AsianEndHour    { get; set; } = 1;
+        [Range(0, 23)] public int AsianEndHour    { get; set; } = 3;
 
         [Display(Name = "London Session Start (ET Hour)",GroupName = "Sessions (ET)", Order = 26)]
         [Range(0, 23)] public int LondonStartHour { get; set; } = 2;
 
         [Display(Name = "London Session End (ET Hour)",  GroupName = "Sessions (ET)", Order = 27)]
-        [Range(0, 23)] public int LondonEndHour   { get; set; } = 8;
+        [Range(0, 23)] public int LondonEndHour   { get; set; } = 9;
 
         [Display(Name = "London Session End (ET Min)",   GroupName = "Sessions (ET)", Order = 28)]
         [Range(0, 59)] public int LondonEndMinute { get; set; } = 30;
@@ -586,7 +586,7 @@ namespace ATAS.Indicators.Custom
             },
             new TableSection
             {
-                Title       = "◈  TODAY ASIAN  (18:00–01:00 ET)",
+                Title       = "◈  TODAY ASIAN  (18:00–03:00 ET)",
                 HeaderColor = Color.FromArgb(200, 10, 50, 90),
                 Rows        = new List<TableRow>
                 {
@@ -596,7 +596,7 @@ namespace ATAS.Indicators.Custom
             },
             new TableSection
             {
-                Title       = "◈  TODAY LONDON  (02:00–08:30 ET)",
+                Title       = "◈  TODAY LONDON  (02:00–09:30 ET)",
                 HeaderColor = Color.FromArgb(200,  8, 70, 45),
                 Rows        = new List<TableRow>
                 {
@@ -606,7 +606,7 @@ namespace ATAS.Indicators.Custom
             },
             new TableSection
             {
-                Title       = "◈  PREV ASIAN  (18:00–01:00 ET)",
+                Title       = "◈  PREV ASIAN  (18:00–03:00 ET)",
                 HeaderColor = Color.FromArgb(200, 10, 40, 72),
                 Rows        = new List<TableRow>
                 {
@@ -616,7 +616,7 @@ namespace ATAS.Indicators.Custom
             },
             new TableSection
             {
-                Title       = "◈  PREV LONDON  (02:00–08:30 ET)",
+                Title       = "◈  PREV LONDON  (02:00–09:30 ET)",
                 HeaderColor = Color.FromArgb(200,  8, 55, 38),
                 Rows        = new List<TableRow>
                 {
