@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net6.0-windows</TargetFramework>
+    <AssemblyName>MarketProfileLevelsTable</AssemblyName>
+    <RootNamespace>ATAS.Indicators.Custom</RootNamespace>
+    <Nullable>enable</Nullable>
+    <Platforms>x64</Platforms>
+    <OutputType>Library</OutputType>
+    <!-- Output directly to ATAS custom indicators folder if desired -->
+    <!-- <OutputPath>$(USERPROFILE)\Documents\ATAS\Indicators\</OutputPath> -->
+  </PropertyGroup>
+
+  <!--
+    ============================================================
+    ATAS ASSEMBLY REFERENCES
+    ============================================================
+    Point these HintPaths at your local ATAS installation.
+
+    Default install paths:
+      64-bit:  C:\Program Files\ATAS Platform\
+      32-bit:  C:\Program Files (x86)\ATAS Platform\
+
+    You can also set the environment variable ATAS_PATH to your
+    installation root and the paths below will resolve correctly.
+
+    Required DLLs (copy from install dir if needed):
+      - ATAS.dll
+      - OFT.Rendering.dll
+      - OFT.Attributes.dll
+  ============================================================
+  -->
+  <ItemGroup>
+    <Reference Include="ATAS">
+      <HintPath>$(ATAS_PATH)\ATAS.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="OFT.Rendering">
+      <HintPath>$(ATAS_PATH)\OFT.Rendering.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="OFT.Attributes">
+      <HintPath>$(ATAS_PATH)\OFT.Attributes.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>
